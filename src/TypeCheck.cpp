@@ -8,7 +8,16 @@ namespace Stella
 
   void typecheckProgram(Program *program)
   {
-    program->accept(new VisitTypeCheck());
+    try
+    {
+      program->accept(new VisitTypeCheck());
+    }
+    catch (type_error e)
+    {
+      std::cout << "Type Error!\n"
+                << e.what() << "\n";
+      exit(1);
+    }
   }
 
 } // namespace Stella

@@ -1,12 +1,77 @@
+#pragma once
 #ifndef STELLA_VISITTYPECHECK_HEADER
 #define STELLA_VISITTYPECHECK_HEADER
 
 #include "Stella/Absyn.H"
+#include "Stella/Printer.H"
+#include <string>
+#include <unordered_map>
 
 namespace Stella
 {
+  class type_error : public std::runtime_error
+  {
+  protected:
+    Stella::PrintAbsyn printer = Stella::PrintAbsyn();
+    std::string message;
+
+  public:
+    type_error() : std::runtime_error("Type Error"){};
+    const char *what() const noexcept override
+    {
+      return message.c_str();
+    }
+  };
+
+  class undefined_variable_error : public type_error
+  {
+  public:
+    undefined_variable_error(Var *var) : type_error()
+    {
+      message = std::string("undefined variable ") + printer.print(var);
+    }
+  };
+
+  class type_mismatch_error : public type_error
+  {
+  public:
+    type_mismatch_error(Type *expected_type, Type *actual_type, Expr *expr) : type_error()
+    {
+      message = std::string("expected type\n") + "  " + printer.print(expected_type) + "\n" + "but got\n" + "  " + printer.print(actual_type) + "\n" + "in expression\n" + "  " + printer.print(expr);
+    }
+  };
+
+  class type_unexpected_anonymous_function : public type_error
+  {
+  public:
+    type_unexpected_anonymous_function(Type *expected_type, Expr *expr) : type_error()
+    {
+      message = std::string("expected non-function type\n") + "  " + printer.print(expected_type) + "\n" + "but got an anonymous function\nin expression\n" + "  " + printer.print(expr);
+    }
+  };
+
+  class expected_function_type_error : public type_error
+  {
+  public:
+    expected_function_type_error(Type *actual_type, Expr *expr) : type_error()
+    {
+      message = std::string("expected a function type\nbut got\n  ") + printer.print(actual_type) + "\nin expression\n" + "  " + printer.print(expr);
+    }
+  };
+
   class VisitTypeCheck : public Visitor
   {
+  private:
+    Stella::PrintAbsyn printer = Stella::PrintAbsyn();
+    std::unordered_map<StellaIdent, Type *> context = {}; // mapping from identifiers (variables and function names) to their types
+    Type *expected_type = nullptr;                        // expected type for the current node (nullptr when no expected type is known or makes sense)
+    Type *actual_type = nullptr;                          // actual type for the last visited node
+
+    void set_actual_type(Expr *expr, Type *type_);
+    std::unordered_map<StellaIdent, Type *> enter_scope(ListParamDecl *paramDecls);
+    void exit_scope(std::unordered_map<StellaIdent, Type *> old_context);
+    Type *typecheck_subexpr(Expr *expr, Type *type);
+
   public:
     void visitProgram(Program *p);
     void visitLanguageDecl(LanguageDecl *p);

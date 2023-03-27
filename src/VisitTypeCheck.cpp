@@ -25,6 +25,51 @@ namespace Stella
   void VisitTypeCheck::visitRecordFieldType(RecordFieldType *t) {}   // abstract class
   void VisitTypeCheck::visitTyping(Typing *t) {}                     // abstract class
 
+  void VisitTypeCheck::set_actual_type(Expr *expr, Type *type_)
+  {
+    if (expected_type)
+    {
+      if (std::string(printer.print(type_)) != printer.print(expected_type))
+      {
+        throw type_mismatch_error(expected_type, type_, expr);
+      }
+    }
+    actual_type = type_;
+  }
+
+  std::unordered_map<StellaIdent, Type *> VisitTypeCheck::enter_scope(ListParamDecl *paramDecls)
+  {
+    auto old_context = std::unordered_map<StellaIdent, Type *>(context);
+
+    for (auto paramDecl : *paramDecls)
+    {
+      AParamDecl *param = dynamic_cast<AParamDecl *>(paramDecl);
+      context.insert({param->stellaident_, param->type_});
+    }
+
+    return old_context;
+  }
+
+  void VisitTypeCheck::exit_scope(std::unordered_map<StellaIdent, Type *> old_context)
+  {
+    context = old_context;
+  }
+
+  Type *VisitTypeCheck::typecheck_subexpr(Expr *expr, Type *type_)
+  {
+    std::cout << "Typechecking subexpression " << printer.print(expr) << "\n";
+    if (type_)
+      std::cout << "  against type " << printer.print(type_) << "\n";
+    auto old_expected_type = expected_type;
+    expected_type = type_;
+    std::cout << "Going in\n";
+    expr->accept(this);
+    std::cout << "Going out\n";
+    expected_type = old_expected_type;
+    std::cout << "Done!\n";
+    return actual_type;
+  }
+
   void VisitTypeCheck::visitAProgram(AProgram *a_program)
   {
     /* Code For AProgram Goes Here */
@@ -53,7 +98,11 @@ namespace Stella
   void VisitTypeCheck::visitDeclFun(DeclFun *decl_fun)
   {
     /* Code For DeclFun Goes Here */
-    std::cout << "Visiting function declaration for " << decl_fun->stellaident_ << "\n";
+    StellaIdent name = decl_fun->stellaident_;
+
+    // extract return type
+    Type *returnType = dynamic_cast<SomeReturnType *>(decl_fun->returntype_)->type_;
+    Expr *returnExpr = decl_fun->expr_;
 
     if (decl_fun->listannotation_)
       decl_fun->listannotation_->accept(this);
@@ -66,8 +115,23 @@ namespace Stella
       decl_fun->throwtype_->accept(this);
     if (decl_fun->listdecl_)
       decl_fun->listdecl_->accept(this);
+
+    // save current context before going inside the body
+    auto old_context = enter_scope(decl_fun->listparamdecl_);
+    // set the expected type for the body
+    expected_type = returnType;
+    // go into the body of the function
     if (decl_fun->expr_)
       decl_fun->expr_->accept(this);
+    // restore context
+    exit_scope(old_context);
+
+    if (auto param_type = dynamic_cast<AParamDecl *>((*decl_fun->listparamdecl_)[0])->type_)
+    {
+      ListType *param_types = new ListType();
+      param_types->push_back(dynamic_cast<AParamDecl *>((*decl_fun->listparamdecl_)[0])->type_);
+      context.insert({decl_fun->stellaident_, new TypeFun(param_types, returnType->clone())});
+    }
   }
 
   void VisitTypeCheck::visitDeclTypeAlias(DeclTypeAlias *decl_type_alias)
@@ -132,7 +196,12 @@ namespace Stella
     /* Code For If Goes Here */
 
     if (if_->expr_1)
+    {
+      Type *old_expected_type = expected_type;
+      expected_type = new TypeBool();
       if_->expr_1->accept(this);
+      expected_type = old_expected_type;
+    }
     if (if_->expr_2)
       if_->expr_2->accept(this);
     if (if_->expr_3)
@@ -223,11 +292,43 @@ namespace Stella
   void VisitTypeCheck::visitAbstraction(Abstraction *abstraction)
   {
     /* Code For Abstraction Goes Here */
+    if (!expected_type)
+    {
+      Type *return_type;
+      Type *param_type = dynamic_cast<AParamDecl *>((*abstraction->listparamdecl_)[0])->type_;
 
-    if (abstraction->listparamdecl_)
-      abstraction->listparamdecl_->accept(this);
-    if (abstraction->expr_)
-      abstraction->expr_->accept(this);
+      if (abstraction->listparamdecl_)
+        abstraction->listparamdecl_->accept(this);
+
+      auto old_context = enter_scope(abstraction->listparamdecl_);
+      return_type = typecheck_subexpr(abstraction->expr_, nullptr);
+      // abstraction->expr_->accept(this);
+      exit_scope(old_context);
+
+      ListType *arg = new ListType;
+      arg->push_back(param_type);
+      set_actual_type(abstraction, new TypeFun(arg, return_type));
+    }
+    else if (auto expected_type_fun = dynamic_cast<TypeFun *>(expected_type))
+    {
+      Type *expected_param_type = (*expected_type_fun->listtype_)[0];
+      Type *expected_return_type = expected_type_fun->type_;
+
+      if (abstraction->listparamdecl_)
+        abstraction->listparamdecl_->accept(this);
+
+      auto old_context = enter_scope(abstraction->listparamdecl_);
+      typecheck_subexpr(new Var(dynamic_cast<AParamDecl *>((*abstraction->listparamdecl_)[0])->stellaident_), expected_param_type);
+
+      if (abstraction->expr_)
+        typecheck_subexpr(abstraction->expr_, expected_return_type);
+      // abstraction->expr_->accept(this);
+      exit_scope(old_context);
+    }
+    else
+    {
+      throw type_unexpected_anonymous_function(expected_type, abstraction);
+    }
   }
 
   void VisitTypeCheck::visitTuple(Tuple *tuple)
@@ -317,10 +418,19 @@ namespace Stella
   {
     /* Code For Application Goes Here */
 
-    if (application->expr_)
-      application->expr_->accept(this);
-    if (application->listexpr_)
-      application->listexpr_->accept(this);
+    std::cout << "Visiting applciation: " << printer.print(application) << "\n";
+    auto type_of_fun = typecheck_subexpr(application->expr_, nullptr);
+    std::cout << "Computed type of function: " << printer.print(type_of_fun) << "\n";
+    if (auto ft = dynamic_cast<TypeFun *>(type_of_fun))
+    {
+      auto expected_arg_type = (*ft->listtype_)[0];
+      typecheck_subexpr((*application->listexpr_)[0], expected_arg_type);
+      set_actual_type(application, ft->type_);
+    }
+    else
+    {
+      throw expected_function_type_error(type_of_fun, application->expr_);
+    }
   }
 
   void VisitTypeCheck::visitConsList(ConsList *cons_list)
@@ -360,9 +470,14 @@ namespace Stella
   void VisitTypeCheck::visitSucc(Succ *succ)
   {
     /* Code For Succ Goes Here */
+    Type *old_expected_type = expected_type;
+    expected_type = new TypeNat();
 
     if (succ->expr_)
       succ->expr_->accept(this);
+
+    expected_type = old_expected_type;
+    set_actual_type(succ, new TypeNat());
   }
 
   void VisitTypeCheck::visitLogicNot(LogicNot *logic_not)
@@ -401,12 +516,17 @@ namespace Stella
   {
     /* Code For NatRec Goes Here */
 
-    if (nat_rec->expr_1)
-      nat_rec->expr_1->accept(this);
+    typecheck_subexpr(nat_rec->expr_1, new TypeNat());
+    // if (nat_rec->expr_1)
+    //   nat_rec->expr_1->accept(this);
     if (nat_rec->expr_2)
       nat_rec->expr_2->accept(this);
-    if (nat_rec->expr_3)
-      nat_rec->expr_3->accept(this);
+
+    ListType *arg1 = new ListType();
+    arg1->push_back(new TypeNat());
+    ListType *arg2 = new ListType();
+    arg2->push_back(expected_type);
+    typecheck_subexpr(nat_rec->expr_3, new TypeFun(arg1, new TypeFun(arg2, expected_type)));
   }
 
   void VisitTypeCheck::visitFold(Fold *fold)
@@ -450,24 +570,38 @@ namespace Stella
   void VisitTypeCheck::visitConstTrue(ConstTrue *const_true)
   {
     /* Code For ConstTrue Goes Here */
+    set_actual_type(const_true, new TypeBool());
   }
 
   void VisitTypeCheck::visitConstFalse(ConstFalse *const_false)
   {
     /* Code For ConstFalse Goes Here */
+    set_actual_type(const_false, new TypeBool());
   }
 
   void VisitTypeCheck::visitConstInt(ConstInt *const_int)
   {
     /* Code For ConstInt Goes Here */
+    set_actual_type(const_int, new TypeNat());
 
     visitInteger(const_int->integer_);
   }
 
   void VisitTypeCheck::visitVar(Var *var)
   {
-    /* Code For Var Goes Here */
-
+    std::cout << "Visiting variable " << printer.print(var) << "\n";
+    Type *varType;
+    try
+    {
+      varType = context.at(var->stellaident_);
+    }
+    catch (std::out_of_range e)
+    {
+      throw undefined_variable_error(var);
+    }
+    set_actual_type(var, varType);
+    std::cout << "Exiting variable " << printer.print(var) << "\n"
+              << "Type of " << printer.print(var) << " is " << printer.print(varType);
     visitStellaIdent(var->stellaident_);
   }
 
@@ -878,5 +1012,4 @@ namespace Stella
   {
     /* Code for ExtensionName Goes Here */
   }
-
 }
