@@ -62,14 +62,24 @@ namespace Stella
   class VisitTypeCheck : public Visitor
   {
   private:
-    Stella::PrintAbsyn printer = Stella::PrintAbsyn();
+    Stella::PrintAbsyn printer = Stella::PrintAbsyn();    // pretty printer, useful to show nice error and debug messages
     std::unordered_map<StellaIdent, Type *> context = {}; // mapping from identifiers (variables and function names) to their types
     Type *expected_type = nullptr;                        // expected type for the current node (nullptr when no expected type is known or makes sense)
     Type *actual_type = nullptr;                          // actual type for the last visited node
 
+    // compare actual type of an expression against the expected type (if exists)
+    // if they match — set the actual type value, otherwise throw a type error
     void set_actual_type(Expr *expr, Type *type_);
+
+    // enter scope (e.g. body of a function) with local variables given by a list of parameter declarations
+    // return a copy of current context to recover when exiting from the scope
     std::unordered_map<StellaIdent, Type *> enter_scope(ListParamDecl *paramDecls);
+
+    // exit scope by recovering a given context
     void exit_scope(std::unordered_map<StellaIdent, Type *> old_context);
+
+    // typecheck a subexpression against a given type (or infer when type is nullptr)
+    // return the actual type of expression after successful typechecking
     Type *typecheck_subexpr(Expr *expr, Type *type);
 
   public:
