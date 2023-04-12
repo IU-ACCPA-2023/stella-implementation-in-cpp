@@ -118,11 +118,8 @@ namespace Stella
 
     // save current context before going inside the body
     auto old_context = enter_scope(decl_fun->listparamdecl_);
-    // set the expected type for the body
-    expected_type = returnType;
     // go into the body of the function
-    if (decl_fun->expr_)
-      decl_fun->expr_->accept(this);
+    typecheck_subexpr(decl_fun->expr_, returnType);
     // restore context
     exit_scope(old_context);
 
@@ -195,17 +192,10 @@ namespace Stella
   {
     /* Code For If Goes Here */
 
-    if (if_->expr_1)
-    {
-      Type *old_expected_type = expected_type;
-      expected_type = new TypeBool();
-      if_->expr_1->accept(this);
-      expected_type = old_expected_type;
-    }
-    if (if_->expr_2)
-      if_->expr_2->accept(this);
-    if (if_->expr_3)
-      if_->expr_3->accept(this);
+    typecheck_subexpr(if_->expr_1, new TypeBool());
+    auto then_type = typecheck_subexpr(if_->expr_2, expected_type);
+    typecheck_subexpr(if_->expr_3, then_type);
+    set_actual_type(if_, then_type);
   }
 
   void VisitTypeCheck::visitLet(Let *let)
@@ -292,7 +282,7 @@ namespace Stella
   void VisitTypeCheck::visitAbstraction(Abstraction *abstraction)
   {
     /* Code For Abstraction Goes Here */
-    if (!expected_type)
+    if (!expected_type) /* if expected type of the abstraction is not known */
     {
       Type *return_type;
       Type *param_type = dynamic_cast<AParamDecl *>((*abstraction->listparamdecl_)[0])->type_;
@@ -319,11 +309,10 @@ namespace Stella
 
       auto old_context = enter_scope(abstraction->listparamdecl_);
       typecheck_subexpr(new Var(dynamic_cast<AParamDecl *>((*abstraction->listparamdecl_)[0])->stellaident_), expected_param_type);
-
-      if (abstraction->expr_)
-        typecheck_subexpr(abstraction->expr_, expected_return_type);
+      typecheck_subexpr(abstraction->expr_, expected_return_type);
       // abstraction->expr_->accept(this);
       exit_scope(old_context);
+      set_actual_type(abstraction, expected_type);
     }
     else
     {
@@ -418,7 +407,7 @@ namespace Stella
   {
     /* Code For Application Goes Here */
 
-    std::cout << "Visiting applciation: " << printer.print(application) << "\n";
+    std::cout << "Visiting application: " << printer.print(application) << "\n";
     auto type_of_fun = typecheck_subexpr(application->expr_, nullptr);
     std::cout << "Computed type of function: " << printer.print(type_of_fun) << "\n";
     if (auto ft = dynamic_cast<TypeFun *>(type_of_fun))
@@ -470,13 +459,7 @@ namespace Stella
   void VisitTypeCheck::visitSucc(Succ *succ)
   {
     /* Code For Succ Goes Here */
-    Type *old_expected_type = expected_type;
-    expected_type = new TypeNat();
-
-    if (succ->expr_)
-      succ->expr_->accept(this);
-
-    expected_type = old_expected_type;
+    typecheck_subexpr(succ->expr_, new TypeNat());
     set_actual_type(succ, new TypeNat());
   }
 
@@ -517,16 +500,13 @@ namespace Stella
     /* Code For NatRec Goes Here */
 
     typecheck_subexpr(nat_rec->expr_1, new TypeNat());
-    // if (nat_rec->expr_1)
-    //   nat_rec->expr_1->accept(this);
-    if (nat_rec->expr_2)
-      nat_rec->expr_2->accept(this);
+    auto return_type = typecheck_subexpr(nat_rec->expr_2, expected_type);
 
     ListType *arg1 = new ListType();
     arg1->push_back(new TypeNat());
     ListType *arg2 = new ListType();
-    arg2->push_back(expected_type);
-    typecheck_subexpr(nat_rec->expr_3, new TypeFun(arg1, new TypeFun(arg2, expected_type)));
+    arg2->push_back(return_type);
+    typecheck_subexpr(nat_rec->expr_3, new TypeFun(arg1, new TypeFun(arg2, return_type->clone())));
   }
 
   void VisitTypeCheck::visitFold(Fold *fold)
