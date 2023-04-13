@@ -29,7 +29,7 @@ namespace Stella
   {
     if (expected_type)
     {
-      if (std::string(printer.print(type_)) != printer.print(expected_type))
+      if (std::string(printer.print(type_)) != std::string(printer.print(expected_type)))
       {
         throw type_mismatch_error(expected_type, type_, expr);
       }

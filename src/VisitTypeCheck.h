@@ -4,6 +4,7 @@
 
 #include "Stella/Absyn.H"
 #include "Stella/Printer.H"
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
